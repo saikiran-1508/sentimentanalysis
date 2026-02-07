@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "162310677260",
+    "project_id": "sentimentanalysis-e1845",
+    "storage_bucket": "sentimentanalysis-e1845.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:162310677260:android:049d59dafdce0d86429f29",
+        "android_client_info": {
+          "package_name": "com.example.sentimentanalysis"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "162310677260-2i0bstgooh50u6fbkn0e2oec6p627dtj.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.sentimentanalysis",
+            "certificate_hash": "231a0dee12bd4be25fd793d4a32b8423a7b7f2fc"
+          }
+        },
+        {
+          "client_id": "162310677260-8hrst5lmpvelcrh8o3gjfmhjglossbn9.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC737cmj9QkBug_9YR8HSZ8FD8JkgEEcqA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "162310677260-8hrst5lmpvelcrh8o3gjfmhjglossbn9.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
