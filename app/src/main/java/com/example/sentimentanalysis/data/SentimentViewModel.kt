@@ -1,5 +1,6 @@
 package com.example.sentimentanalysis.data
 
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.ai.client.generativeai.GenerativeModel
@@ -9,41 +10,134 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 
-// 1. Data for the Chart (Dominant Emotion Score)
-data class SentimentDataPoint(
-    val score: Int, // 1-10 Intensity
-    val label: String,
-    val timestamp: String
-)
+// --- DATA MODELS ---
 
-// 2. Data for the Detailed List (The Breakdown)
 data class EmotionProfile(
-    val anger: Int = 0,
-    val joy: Int = 0,     // Laughing/Happy
-    val calm: Int = 0,    // Relaxed
+    val happiness: Int = 0,
     val sadness: Int = 0,
+    val anger: Int = 0,
     val fear: Int = 0,
-    val surprise: Int = 0
-)
+    val surprise: Int = 0,
+    val disgust: Int = 0
+) {
+    constructor() : this(0,0,0,0,0,0)
+}
+
+data class SentimentDataPoint(
+    val id: String = UUID.randomUUID().toString(),
+    val label: String = "",
+    val text: String = "",
+    val timestamp: String = "",
+    val date: String = "",
+    val timestampLong: Long = 0L,
+    val profile: EmotionProfile = EmotionProfile()
+) {
+    constructor() : this(UUID.randomUUID().toString(), "", "", "", "", 0L, EmotionProfile())
+}
+
+// NOTE: imageUriString is what Firestore saves.
+data class UserProfile(
+    val name: String = "User",
+    val email: String = "user@example.com",
+    val imageUriString: String? = null,
+    val isGeneratedAvatar: Boolean = false,
+    val avatarEmoji: String? = null
+) {
+    constructor() : this("User", "user@example.com", null, false, null)
+}
 
 class SentimentViewModel : ViewModel() {
 
     private val _uiState = MutableStateFlow<SentimentState>(SentimentState.Idle)
     val uiState = _uiState.asStateFlow()
 
-    // Chart History
     private val _sentimentHistory = MutableStateFlow<List<SentimentDataPoint>>(emptyList())
     val sentimentHistory = _sentimentHistory.asStateFlow()
 
-    // NEW: Detailed Breakdown State
-    private val _currentEmotionProfile = MutableStateFlow(EmotionProfile())
-    val currentEmotionProfile = _currentEmotionProfile.asStateFlow()
+    private val _userProfile = MutableStateFlow(UserProfile())
+    val userProfile = _userProfile.asStateFlow()
+
+    private val repository = SentimentRepository()
+    private var feedbackContext = ""
 
     private val generativeModel = GenerativeModel(
         modelName = "gemini-1.5-flash",
         apiKey = "YOUR_GEMINI_API_KEY_HERE"
     )
+
+    init {
+        // Load data on start (Restores permanent name/image)
+        loadUserData()
+    }
+
+    private fun loadUserData() {
+        viewModelScope.launch {
+            val onlineProfile = repository.getUserProfile()
+            if (onlineProfile != null) {
+                _userProfile.value = onlineProfile
+            }
+            val onlineHistory = repository.getHistory()
+            _sentimentHistory.value = onlineHistory
+        }
+    }
+
+    // --- SAVING LOGIC (Connects to Firebase) ---
+
+    fun updateProfile(name: String, email: String) {
+        val newProfile = _userProfile.value.copy(name = name, email = email)
+        _userProfile.value = newProfile
+        saveProfileToBackend(newProfile)
+    }
+
+    fun setProfileImage(uri: Uri?) {
+        val newProfile = _userProfile.value.copy(
+            imageUriString = uri?.toString(),
+            isGeneratedAvatar = false,
+            avatarEmoji = null
+        )
+        _userProfile.value = newProfile
+        saveProfileToBackend(newProfile)
+    }
+
+    fun generateAiAvatar() {
+        val newProfile = _userProfile.value.copy(
+            imageUriString = null,
+            isGeneratedAvatar = true,
+            avatarEmoji = null
+        )
+        _userProfile.value = newProfile
+        saveProfileToBackend(newProfile)
+    }
+
+    fun setProfileEmoji(emoji: String) {
+        val newProfile = _userProfile.value.copy(
+            imageUriString = null,
+            isGeneratedAvatar = false,
+            avatarEmoji = emoji
+        )
+        _userProfile.value = newProfile
+        saveProfileToBackend(newProfile)
+    }
+
+    fun usePresetAvatar() {
+        val newProfile = _userProfile.value.copy(imageUriString = null, isGeneratedAvatar = false, avatarEmoji = null)
+        _userProfile.value = newProfile
+        saveProfileToBackend(newProfile)
+    }
+
+    private fun saveProfileToBackend(profile: UserProfile) {
+        viewModelScope.launch {
+            repository.saveUserProfile(profile)
+        }
+    }
+
+    // --- ANALYSIS LOGIC ---
+
+    fun teachAI(originalText: String, correctEmotion: String) {
+        feedbackContext += "\n- When user says '$originalText', emotion is '$correctEmotion'."
+    }
 
     fun analyzeSentiment(text: String) {
         if (text.isBlank()) return
@@ -51,52 +145,46 @@ class SentimentViewModel : ViewModel() {
 
         viewModelScope.launch {
             try {
-                // 3. The "Pro" Prompt: Ask for specific numbers for EVERY emotion
                 val prompt = """
-                    Analyze the sentiment of this text spoken by a user: "$text"
-                    
-                    I need a breakdown of these 6 emotions: Anger, Joy, Calm, Sadness, Fear, Surprise.
-                    Rate EACH one from 0 to 100 based on the text intensity.
-                    
-                    Also, give me a "Dominant Sentiment" label and a "Positivity Score" (1-10) for the chart.
-                    
-                    Respond in this EXACT format:
-                    DOMINANT_LABEL|SCORE_1_TO_10|ANGER_PCT|JOY_PCT|CALM_PCT|SADNESS_PCT|FEAR_PCT|SURPRISE_PCT
-                    
-                    Example response:
-                    Happy|8|5|80|10|0|0|5
+                    Analyze tone: "$text". 
+                    Corrections: $feedbackContext
+                    Breakdown: Happiness, Sadness, Anger, Fear, Surprise, Disgust. 0-100%.
+                    Respond: DOMINANT|HAP|SAD|ANG|FEAR|SUR|DIS
                 """.trimIndent()
 
                 val response = generativeModel.generateContent(prompt)
-                val rawText = response.text?.trim() ?: "Neutral|5|0|0|0|0|0|0"
+                val rawText = response.text?.trim() ?: "Neutral|0|0|0|0|0|0"
 
-                // 4. Parse the complex response
                 val parts = rawText.split("|")
                 val dominantLabel = parts.getOrElse(0) { "Neutral" }
-                val chartScore = parts.getOrElse(1) { "5" }.toIntOrNull() ?: 5
+                val hap = parts.getOrElse(1) { "0" }.toIntOrNull() ?: 0
+                val sad = parts.getOrElse(2) { "0" }.toIntOrNull() ?: 0
+                val ang = parts.getOrElse(3) { "0" }.toIntOrNull() ?: 0
+                val fea = parts.getOrElse(4) { "0" }.toIntOrNull() ?: 0
+                val sur = parts.getOrElse(5) { "0" }.toIntOrNull() ?: 0
+                val dis = parts.getOrElse(6) { "0" }.toIntOrNull() ?: 0
 
-                // Detailed Breakdown
-                val anger = parts.getOrElse(2) { "0" }.toIntOrNull() ?: 0
-                val joy = parts.getOrElse(3) { "0" }.toIntOrNull() ?: 0
-                val calm = parts.getOrElse(4) { "0" }.toIntOrNull() ?: 0
-                val sadness = parts.getOrElse(5) { "0" }.toIntOrNull() ?: 0
-                val fear = parts.getOrElse(6) { "0" }.toIntOrNull() ?: 0
-                val surprise = parts.getOrElse(7) { "0" }.toIntOrNull() ?: 0
+                val profile = EmotionProfile(hap, sad, ang, fea, sur, dis)
+                val now = Date()
 
-                // Update Chart History
                 val newPoint = SentimentDataPoint(
-                    score = chartScore,
                     label = dominantLabel,
-                    timestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+                    text = text,
+                    timestamp = SimpleDateFormat("HH:mm", Locale.getDefault()).format(now),
+                    date = SimpleDateFormat("MMM dd", Locale.getDefault()).format(now),
+                    timestampLong = now.time,
+                    profile = profile
                 )
-                val currentList = _sentimentHistory.value.toMutableList()
-                currentList.add(newPoint)
+
+                var currentList = _sentimentHistory.value.toMutableList()
+                currentList.add(0, newPoint)
+                if (currentList.size > 10) currentList = currentList.take(10).toMutableList()
                 _sentimentHistory.value = currentList
 
-                // Update Detailed Breakdown
-                _currentEmotionProfile.value = EmotionProfile(anger, joy, calm, sadness, fear, surprise)
+                // Save record to DB
+                repository.addRecord(newPoint)
 
-                _uiState.value = SentimentState.Success(dominantLabel, text)
+                _uiState.value = SentimentState.Success(dominantLabel, text, profile)
 
             } catch (e: Exception) {
                 _uiState.value = SentimentState.Error("AI Error: ${e.message}")
@@ -105,10 +193,9 @@ class SentimentViewModel : ViewModel() {
     }
 }
 
-// State Helper
 sealed class SentimentState {
     object Idle : SentimentState()
     object Loading : SentimentState()
-    data class Success(val sentiment: String, val input: String) : SentimentState()
+    data class Success(val sentiment: String, val input: String, val profile: EmotionProfile) : SentimentState()
     data class Error(val message: String) : SentimentState()
 }

@@ -1,25 +1,13 @@
 package com.example.sentimentanalysis.screens
 
-import android.Manifest
-import android.content.Context
+import android.app.Activity
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Bundle
-import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
-import android.widget.Toast
+import android.speech.tts.TextToSpeech
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -34,311 +22,260 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.sentimentanalysis.data.EmotionProfile
 import com.example.sentimentanalysis.data.SentimentState
 import com.example.sentimentanalysis.data.SentimentViewModel
 import java.util.Locale
 
+// Neon Colors
+val NeonGreen = Color(0xFF00E676)
+val NeonBlue = Color(0xFF2979FF)
+val NeonRed = Color(0xFFFF1744)
+val NeonPurple = Color(0xFFD500F9)
+val NeonYellow = Color(0xFFFFEA00)
+val NeonOrange = Color(0xFFFF9100)
+val DarkBg = Color(0xFF121212)
+val CardBg = Color(0xFF1E1E1E)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DashboardScreen(
-    userData: String?,
-    onSignOut: () -> Unit,
+    onNavigateToProfile: () -> Unit,
     sentimentViewModel: SentimentViewModel = viewModel()
 ) {
     val uiState by sentimentViewModel.uiState.collectAsState()
-    val history by sentimentViewModel.sentimentHistory.collectAsState()
-    val currentProfile by sentimentViewModel.currentEmotionProfile.collectAsState()
-
     var inputText by remember { mutableStateOf("") }
-    var isListening by remember { mutableStateOf(false) } // Track if mic is active
+
+    // Feedback States
+    var showFeedbackDialog by remember { mutableStateOf(false) }
+    var lastAnalyzedText by remember { mutableStateOf("") }
+
     val context = LocalContext.current
+    var tts: TextToSpeech? by remember { mutableStateOf(null) }
 
-    // Initialize SpeechRecognizer
-    val speechRecognizer = remember { SpeechRecognizer.createSpeechRecognizer(context) }
-    val speechIntent = remember {
-        Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+    LaunchedEffect(Unit) {
+        tts = TextToSpeech(context) { if (it != TextToSpeech.ERROR) tts?.language = Locale.getDefault() }
+    }
+
+    val speechLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val res = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.get(0)
+            if (res != null) inputText = res
         }
     }
 
-    // Permission Launcher
-    val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            Toast.makeText(context, "Permission Granted. Tap Mic to speak.", Toast.LENGTH_SHORT).show()
-        } else {
-            Toast.makeText(context, "Microphone permission is required.", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    // Speech Listener Logic
-    DisposableEffect(Unit) {
-        val listener = object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {}
-            override fun onBeginningOfSpeech() { isListening = true }
-            override fun onRmsChanged(rmsdB: Float) {}
-            override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() { isListening = false }
-            override fun onError(error: Int) {
-                isListening = false
-                // Don't show toast for "No match" to keep it clean
-            }
-            override fun onResults(results: Bundle?) {
-                val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                if (!matches.isNullOrEmpty()) {
-                    inputText = matches[0]
-                    isListening = false
+    // --- FEEDBACK DIALOG (Self-Improvement) ---
+    if (showFeedbackDialog) {
+        AlertDialog(
+            onDismissRequest = { showFeedbackDialog = false },
+            containerColor = CardBg,
+            title = { Text("Improve AI Accuracy", color = Color.White) },
+            text = { Text("What was the correct emotion?", color = Color.Gray) },
+            confirmButton = {
+                Column {
+                    val emotions = listOf("Happiness", "Sadness", "Anger", "Fear", "Surprise", "Disgust")
+                    emotions.forEach { emotion ->
+                        TextButton(
+                            onClick = {
+                                sentimentViewModel.teachAI(lastAnalyzedText, emotion)
+                                showFeedbackDialog = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(emotion, color = NeonBlue)
+                        }
+                    }
                 }
             }
-            override fun onPartialResults(partialResults: Bundle?) {}
-            override fun onEvent(eventType: Int, params: Bundle?) {}
-        }
-        speechRecognizer.setRecognitionListener(listener)
-        onDispose {
-            speechRecognizer.destroy()
-        }
+        )
     }
 
     Scaffold(
+        containerColor = DarkBg,
         topBar = {
             TopAppBar(
-                title = { Text("AI Sentiment Analyzer", fontWeight = FontWeight.Bold) },
+                title = { Text("AI Sentiment Analyzer", color = Color.White, fontWeight = FontWeight.Bold) },
                 actions = {
-                    IconButton(onClick = onSignOut) {
-                        Icon(Icons.Default.Logout, contentDescription = "Sign Out", tint = MaterialTheme.colorScheme.error)
+                    IconButton(onClick = onNavigateToProfile) {
+                        Box(Modifier.size(36.dp).clip(CircleShape).background(NeonPurple), Alignment.Center) {
+                            Icon(Icons.Default.Person, null, tint = Color.White)
+                        }
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = DarkBg)
             )
         }
     ) { padding ->
         Column(
-            modifier = Modifier
-                .padding(padding)
-                .fillMaxSize()
-                .padding(horizontal = 20.dp)
-                .verticalScroll(rememberScrollState()),
+            modifier = Modifier.padding(padding).fillMaxSize().padding(horizontal = 20.dp).verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Spacer(modifier = Modifier.height(20.dp))
 
-            Text(
-                text = "Hello, ${userData ?: "User"}",
-                style = MaterialTheme.typography.headlineSmall,
-                color = MaterialTheme.colorScheme.primary
-            )
-            Text(
-                text = if (isListening) "Listening..." else "Tap to speak in any language",
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (isListening) Color.Red else MaterialTheme.colorScheme.secondary,
-                fontWeight = if (isListening) FontWeight.Bold else FontWeight.Normal
-            )
-
-            Spacer(modifier = Modifier.height(30.dp))
-
-            // 1. SEAMLESS MIC BUTTON (No Popup)
-            val micColor by animateColorAsState(if (isListening) Color(0xFFFF1744) else MaterialTheme.colorScheme.primaryContainer, label = "micColor")
-            val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-            val scale by if (isListening) {
-                infiniteTransition.animateFloat(
-                    initialValue = 1f,
-                    targetValue = 1.2f,
-                    animationSpec = infiniteRepeatable(tween(500), RepeatMode.Reverse),
-                    label = "scale"
-                )
-            } else {
-                remember { mutableStateOf(1f) }
-            }
-
+            // 1. Mic Button
             Box(
                 modifier = Modifier
-                    .size(120.dp)
-                    .scale(scale)
+                    .size(140.dp)
                     .clip(CircleShape)
-                    .background(micColor)
+                    .background(Brush.radialGradient(listOf(NeonPurple.copy(alpha=0.4f), Color.Transparent)))
                     .clickable {
-                        // Check Permission first
-                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                            if (isListening) {
-                                speechRecognizer.stopListening()
-                                isListening = false
-                            } else {
-                                speechRecognizer.startListening(speechIntent)
-                                isListening = true
-                            }
-                        } else {
-                            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+                            putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak now...")
                         }
+                        try { speechLauncher.launch(intent) } catch (e: Exception) { }
                     },
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = if (isListening) Icons.Default.GraphicEq else Icons.Default.Mic,
-                    contentDescription = "Speak",
-                    modifier = Modifier.size(60.dp),
-                    tint = if (isListening) Color.White else MaterialTheme.colorScheme.primary
-                )
+                Box(Modifier.size(90.dp).clip(CircleShape).background(Brush.linearGradient(listOf(NeonPurple, NeonBlue))), Alignment.Center) {
+                    Icon(Icons.Default.Mic, null, tint = Color.White, modifier = Modifier.size(40.dp))
+                }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
-            // Show text ONLY if spoken
+            // 2. Text & Controls
             if (inputText.isNotBlank()) {
-                Text(
-                    text = "\"$inputText\"",
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(16.dp)
-                )
+                Text("\"$inputText\"", color = Color.White, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(bottom = 12.dp))
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Button(
+                        onClick = { tts?.speak(inputText, TextToSpeech.QUEUE_FLUSH, null, null) },
+                        colors = ButtonDefaults.buttonColors(containerColor = CardBg),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.VolumeUp, null, tint = NeonBlue)
+                        Text(" Listen", color = Color.White)
+                    }
 
-                // 2. ANALYZE BUTTON (Triggers Charts)
-                Button(
-                    onClick = { sentimentViewModel.analyzeSentiment(inputText) },
-                    modifier = Modifier.fillMaxWidth().height(50.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    enabled = uiState !is SentimentState.Loading
-                ) {
-                    if (uiState is SentimentState.Loading) {
-                        CircularProgressIndicator(color = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(24.dp))
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text("Analyzing...")
-                    } else {
-                        Text("Analyze Emotions")
+                    Button(
+                        onClick = {
+                            lastAnalyzedText = inputText
+                            sentimentViewModel.analyzeSentiment(inputText)
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = NeonPurple),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.width(140.dp)
+                    ) {
+                        if (uiState is SentimentState.Loading) {
+                            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
+                        } else {
+                            Text("Analyze", fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }
 
             Spacer(modifier = Modifier.height(30.dp))
 
-            // 3. RESULTS (Hidden until Analyze is clicked)
-            AnimatedVisibility(visible = uiState is SentimentState.Success, enter = fadeIn()) {
-                Column {
-                    if (uiState is SentimentState.Success) {
-                        val state = uiState as SentimentState.Success
+            // 3. RESULTS (Clean No-Emoji Layout)
+            AnimatedVisibility(visible = uiState is SentimentState.Success) {
+                if (uiState is SentimentState.Success) {
+                    val state = uiState as SentimentState.Success
 
-                        // A. Main Result Card
-                        ResultCard(sentiment = state.sentiment)
+                    Column {
+                        // The New Bar Chart
+                        EmotionBarList(state.profile)
 
-                        Spacer(modifier = Modifier.height(20.dp))
+                        Spacer(modifier = Modifier.height(24.dp))
 
-                        // B. The Chart
-                        SentimentChart(history = history)
-
-                        Spacer(modifier = Modifier.height(20.dp))
-
-                        // C. Compact Side-by-Side Emotion Bars
-                        CompactEmotionGrid(profile = currentProfile)
+                        // 4. Feedback Question
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = CardBg),
+                            shape = RoundedCornerShape(12.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color.Gray.copy(alpha=0.3f))
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Was this correct?", color = Color.Gray)
+                                Row {
+                                    TextButton(onClick = { /* Correct */ }) { Text("Yes", color = NeonGreen) }
+                                    TextButton(onClick = { showFeedbackDialog = true }) { Text("No", color = NeonRed) }
+                                }
+                            }
+                        }
                     }
                 }
             }
-
-            if (uiState is SentimentState.Error) {
-                Text(
-                    text = (uiState as SentimentState.Error).message,
-                    color = MaterialTheme.colorScheme.error
-                )
-            }
-
             Spacer(modifier = Modifier.height(50.dp))
         }
     }
 }
 
-// --- HELPER: Compact Grid for Emotions (Side by Side) ---
+// --- NEW COMPONENT: Clean Layout (Label Top, Bar Bottom) ---
 @Composable
-fun CompactEmotionGrid(profile: EmotionProfile) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha=0.5f), RoundedCornerShape(16.dp))
-            .padding(16.dp)
+fun EmotionBarList(profile: EmotionProfile) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = CardBg),
+        shape = RoundedCornerShape(16.dp)
     ) {
-        Text("Emotion Breakdown", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-        Spacer(modifier = Modifier.height(10.dp))
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Emotion Breakdown", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Spacer(modifier = Modifier.height(16.dp))
 
-        Row(Modifier.fillMaxWidth()) {
-            CompactEmotionItem("Joy", profile.joy, Color(0xFF00E676), Modifier.weight(1f))
-            Spacer(modifier = Modifier.width(10.dp))
-            CompactEmotionItem("Calm", profile.calm, Color(0xFF00B0FF), Modifier.weight(1f))
-        }
-        Spacer(modifier = Modifier.height(8.dp))
-        Row(Modifier.fillMaxWidth()) {
-            CompactEmotionItem("Surprise", profile.surprise, Color(0xFFFFEA00), Modifier.weight(1f))
-            Spacer(modifier = Modifier.width(10.dp))
-            CompactEmotionItem("Sadness", profile.sadness, Color(0xFF90A4AE), Modifier.weight(1f))
-        }
-        Spacer(modifier = Modifier.height(8.dp))
-        Row(Modifier.fillMaxWidth()) {
-            CompactEmotionItem("Fear", profile.fear, Color(0xFFAA00FF), Modifier.weight(1f))
-            Spacer(modifier = Modifier.width(10.dp))
-            CompactEmotionItem("Anger", profile.anger, Color(0xFFFF1744), Modifier.weight(1f))
+            // Clean Labels (No Emojis)
+            EmotionRowItem("Happiness", profile.happiness, NeonGreen)
+            EmotionRowItem("Sadness", profile.sadness, NeonBlue)
+            EmotionRowItem("Anger", profile.anger, NeonRed)
+            EmotionRowItem("Fear", profile.fear, NeonPurple)
+            EmotionRowItem("Surprise", profile.surprise, NeonYellow)
+            EmotionRowItem("Disgust", profile.disgust, NeonOrange)
         }
     }
 }
 
 @Composable
-fun CompactEmotionItem(label: String, percentage: Int, color: Color, modifier: Modifier = Modifier) {
+fun EmotionRowItem(label: String, percentage: Int, color: Color) {
     val animatedProgress by animateFloatAsState(targetValue = percentage / 100f, label = "progress")
 
-    Column(modifier = modifier) {
-        Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-            Text(label, style = MaterialTheme.typography.bodySmall)
-            Text("$percentage%", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+    // Vertical Stack: Label on TOP, Bar BELOW
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
+    ) {
+        // 1. Label and Percentage Row
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = label, // Clean Text
+                color = Color.White,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                text = "$percentage%",
+                color = Color.Gray,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
         }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        // 2. The Bar (Now below the text)
         LinearProgressIndicator(
             progress = { animatedProgress },
-            modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(8.dp)
+                .clip(RoundedCornerShape(4.dp)),
             color = color,
-            trackColor = MaterialTheme.colorScheme.surfaceVariant
+            trackColor = Color.DarkGray
         )
-    }
-}
-
-// --- HELPER: Result Card ---
-@Composable
-fun ResultCard(sentiment: String) {
-    val (bgColor, icon, text) = when (sentiment.lowercase()) {
-        "positive", "happy", "joy" -> Triple(Color(0xFF00C853), Icons.Default.Mood, "Positive Vibes!")
-        "negative", "sad", "anger", "fear" -> Triple(Color(0xFFD50000), Icons.Default.MoodBad, "Negative Emotion")
-        "calm", "relaxed" -> Triple(Color(0xFF00B0FF), Icons.Default.SelfImprovement, "Calm & Relaxed")
-        else -> Triple(Color(0xFF455A64), Icons.Default.SentimentNeutral, "Neutral Tone")
-    }
-
-    Card(
-        modifier = Modifier.fillMaxWidth().height(100.dp),
-        shape = RoundedCornerShape(20.dp),
-        elevation = CardDefaults.cardElevation(8.dp)
-    ) {
-        Box(
-            modifier = Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(bgColor, bgColor.copy(alpha = 0.7f))))
-        ) {
-            Row(
-                modifier = Modifier.fillMaxSize().padding(20.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column {
-                    Text("Dominant Emotion", color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.labelMedium)
-                    Text(text, color = Color.White, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                }
-                Icon(imageVector = icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(40.dp))
-            }
-        }
     }
 }
