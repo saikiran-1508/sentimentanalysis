@@ -1,18 +1,39 @@
 package com.example.sentimentanalysis.data
 
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.google.ai.client.generativeai.GenerativeModel
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.UserProfileChangeRequest
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.Query
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.UUID
+import java.util.concurrent.TimeUnit
 
-// --- DATA MODELS ---
+// --- DATA CLASSES ---
+data class UserProfile(
+    val name: String = "User",
+    val email: String = "user@example.com",
+    val imageUriString: String? = null,
+    val avatarEmoji: String? = null,
+    val isGeneratedAvatar: Boolean = false
+)
 
 data class EmotionProfile(
     val happiness: Int = 0,
@@ -21,181 +42,244 @@ data class EmotionProfile(
     val fear: Int = 0,
     val surprise: Int = 0,
     val disgust: Int = 0
-) {
-    constructor() : this(0,0,0,0,0,0)
-}
+)
 
 data class SentimentDataPoint(
-    val id: String = UUID.randomUUID().toString(),
-    val label: String = "",
+    val id: String = "",
     val text: String = "",
+    val sentiment: String = "",
+    val profile: EmotionProfile = EmotionProfile(),
     val timestamp: String = "",
-    val date: String = "",
-    val timestampLong: Long = 0L,
-    val profile: EmotionProfile = EmotionProfile()
-) {
-    constructor() : this(UUID.randomUUID().toString(), "", "", "", "", 0L, EmotionProfile())
-}
+    val date: String = ""
+)
 
-// NOTE: imageUriString is what Firestore saves.
-data class UserProfile(
-    val name: String = "User",
-    val email: String = "user@example.com",
-    val imageUriString: String? = null,
-    val isGeneratedAvatar: Boolean = false,
-    val avatarEmoji: String? = null
-) {
-    constructor() : this("User", "user@example.com", null, false, null)
+// --- UI STATES ---
+sealed class SentimentState {
+    object Idle : SentimentState()
+    object Loading : SentimentState()
+    data class Success(
+        val sentiment: String,
+        val input: String,
+        val profile: EmotionProfile
+    ) : SentimentState()
+    data class Error(val message: String) : SentimentState()
 }
 
 class SentimentViewModel : ViewModel() {
 
+    // --- STATES ---
     private val _uiState = MutableStateFlow<SentimentState>(SentimentState.Idle)
-    val uiState = _uiState.asStateFlow()
-
-    private val _sentimentHistory = MutableStateFlow<List<SentimentDataPoint>>(emptyList())
-    val sentimentHistory = _sentimentHistory.asStateFlow()
+    val uiState: StateFlow<SentimentState> = _uiState.asStateFlow()
 
     private val _userProfile = MutableStateFlow(UserProfile())
-    val userProfile = _userProfile.asStateFlow()
+    val userProfile: StateFlow<UserProfile> = _userProfile.asStateFlow()
 
-    private val repository = SentimentRepository()
-    private var feedbackContext = ""
+    private val _sentimentHistory = MutableStateFlow<List<SentimentDataPoint>>(emptyList())
+    val sentimentHistory: StateFlow<List<SentimentDataPoint>> = _sentimentHistory.asStateFlow()
 
-    private val generativeModel = GenerativeModel(
-        modelName = "gemini-1.5-flash",
-        apiKey = "YOUR_GEMINI_API_KEY_HERE"
-    )
+    // --- FIREBASE & NETWORK ---
+    private val auth = FirebaseAuth.getInstance()
+    private val firestore = FirebaseFirestore.getInstance()
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .build()
+
+    // --- AUTH LISTENER ---
+    private val authStateListener = FirebaseAuth.AuthStateListener { firebaseAuth ->
+        val user = firebaseAuth.currentUser
+        if (user != null) {
+            val currentName = if (user.displayName.isNullOrBlank()) "User" else user.displayName!!
+            val currentEmail = user.email ?: "No Email"
+            val currentPhoto = user.photoUrl?.toString()
+
+            _userProfile.value = UserProfile(
+                name = currentName,
+                email = currentEmail,
+                imageUriString = currentPhoto
+            )
+            fetchHistory(user.uid)
+        } else {
+            _userProfile.value = UserProfile()
+            _sentimentHistory.value = emptyList()
+        }
+    }
 
     init {
-        // Load data on start (Restores permanent name/image)
-        loadUserData()
+        auth.addAuthStateListener(authStateListener)
     }
 
-    private fun loadUserData() {
-        viewModelScope.launch {
-            val onlineProfile = repository.getUserProfile()
-            if (onlineProfile != null) {
-                _userProfile.value = onlineProfile
-            }
-            val onlineHistory = repository.getHistory()
-            _sentimentHistory.value = onlineHistory
+    override fun onCleared() {
+        super.onCleared()
+        auth.removeAuthStateListener(authStateListener)
+    }
+
+    // --- ANALYZE SENTIMENT ---
+    fun analyzeSentiment(inputText: String) {
+        if (inputText.isBlank()) {
+            _uiState.value = SentimentState.Idle // Reset if empty
+            return
         }
-    }
 
-    // --- SAVING LOGIC (Connects to Firebase) ---
-
-    fun updateProfile(name: String, email: String) {
-        val newProfile = _userProfile.value.copy(name = name, email = email)
-        _userProfile.value = newProfile
-        saveProfileToBackend(newProfile)
-    }
-
-    fun setProfileImage(uri: Uri?) {
-        val newProfile = _userProfile.value.copy(
-            imageUriString = uri?.toString(),
-            isGeneratedAvatar = false,
-            avatarEmoji = null
-        )
-        _userProfile.value = newProfile
-        saveProfileToBackend(newProfile)
-    }
-
-    fun generateAiAvatar() {
-        val newProfile = _userProfile.value.copy(
-            imageUriString = null,
-            isGeneratedAvatar = true,
-            avatarEmoji = null
-        )
-        _userProfile.value = newProfile
-        saveProfileToBackend(newProfile)
-    }
-
-    fun setProfileEmoji(emoji: String) {
-        val newProfile = _userProfile.value.copy(
-            imageUriString = null,
-            isGeneratedAvatar = false,
-            avatarEmoji = emoji
-        )
-        _userProfile.value = newProfile
-        saveProfileToBackend(newProfile)
-    }
-
-    fun usePresetAvatar() {
-        val newProfile = _userProfile.value.copy(imageUriString = null, isGeneratedAvatar = false, avatarEmoji = null)
-        _userProfile.value = newProfile
-        saveProfileToBackend(newProfile)
-    }
-
-    private fun saveProfileToBackend(profile: UserProfile) {
-        viewModelScope.launch {
-            repository.saveUserProfile(profile)
-        }
-    }
-
-    // --- ANALYSIS LOGIC ---
-
-    fun teachAI(originalText: String, correctEmotion: String) {
-        feedbackContext += "\n- When user says '$originalText', emotion is '$correctEmotion'."
-    }
-
-    fun analyzeSentiment(text: String) {
-        if (text.isBlank()) return
         _uiState.value = SentimentState.Loading
 
         viewModelScope.launch {
             try {
-                val prompt = """
-                    Analyze tone: "$text". 
-                    Corrections: $feedbackContext
-                    Breakdown: Happiness, Sadness, Anger, Fear, Surprise, Disgust. 0-100%.
-                    Respond: DOMINANT|HAP|SAD|ANG|FEAR|SUR|DIS
-                """.trimIndent()
+                val result = withContext(Dispatchers.IO) { callGroqApi(inputText) }
 
-                val response = generativeModel.generateContent(prompt)
-                val rawText = response.text?.trim() ?: "Neutral|0|0|0|0|0|0"
-
-                val parts = rawText.split("|")
-                val dominantLabel = parts.getOrElse(0) { "Neutral" }
-                val hap = parts.getOrElse(1) { "0" }.toIntOrNull() ?: 0
-                val sad = parts.getOrElse(2) { "0" }.toIntOrNull() ?: 0
-                val ang = parts.getOrElse(3) { "0" }.toIntOrNull() ?: 0
-                val fea = parts.getOrElse(4) { "0" }.toIntOrNull() ?: 0
-                val sur = parts.getOrElse(5) { "0" }.toIntOrNull() ?: 0
-                val dis = parts.getOrElse(6) { "0" }.toIntOrNull() ?: 0
-
-                val profile = EmotionProfile(hap, sad, ang, fea, sur, dis)
-                val now = Date()
-
-                val newPoint = SentimentDataPoint(
-                    label = dominantLabel,
-                    text = text,
-                    timestamp = SimpleDateFormat("HH:mm", Locale.getDefault()).format(now),
-                    date = SimpleDateFormat("MMM dd", Locale.getDefault()).format(now),
-                    timestampLong = now.time,
-                    profile = profile
+                val sentiment = extractValue(result, "SENTIMENT: ") ?: "Neutral"
+                val profile = EmotionProfile(
+                    happiness = extractScore(result, "Happiness="),
+                    sadness = extractScore(result, "Sadness="),
+                    anger = extractScore(result, "Anger="),
+                    fear = extractScore(result, "Fear="),
+                    surprise = extractScore(result, "Surprise="),
+                    disgust = extractScore(result, "Disgust=")
                 )
 
-                var currentList = _sentimentHistory.value.toMutableList()
-                currentList.add(0, newPoint)
-                if (currentList.size > 10) currentList = currentList.take(10).toMutableList()
-                _sentimentHistory.value = currentList
-
-                // Save record to DB
-                repository.addRecord(newPoint)
-
-                _uiState.value = SentimentState.Success(dominantLabel, text, profile)
+                _uiState.value = SentimentState.Success(sentiment, inputText, profile)
+                saveToFirebase(inputText, sentiment, profile)
 
             } catch (e: Exception) {
-                _uiState.value = SentimentState.Error("AI Error: ${e.message}")
+                e.printStackTrace()
+                _uiState.value = SentimentState.Error("Analysis Failed: ${e.message}")
             }
         }
     }
-}
 
-sealed class SentimentState {
-    object Idle : SentimentState()
-    object Loading : SentimentState()
-    data class Success(val sentiment: String, val input: String, val profile: EmotionProfile) : SentimentState()
-    data class Error(val message: String) : SentimentState()
+    // --- SAVE TO FIREBASE ---
+    private fun saveToFirebase(text: String, sentiment: String, profile: EmotionProfile) {
+        val user = auth.currentUser ?: return
+        val now = Date()
+        val formatterDate = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
+        val formatterTime = SimpleDateFormat("hh:mm a", Locale.getDefault())
+
+        val dataPoint = SentimentDataPoint(
+            id = System.currentTimeMillis().toString(),
+            text = text,
+            sentiment = sentiment,
+            profile = profile,
+            date = formatterDate.format(now),
+            timestamp = formatterTime.format(now)
+        )
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                firestore.collection("users").document(user.uid).collection("history")
+                    .add(dataPoint).await()
+                fetchHistory(user.uid)
+            } catch (e: Exception) {
+                Log.e("Firebase", "Error saving", e)
+            }
+        }
+    }
+
+    private fun fetchHistory(uid: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val snapshot = firestore.collection("users").document(uid).collection("history")
+                    .orderBy("id", Query.Direction.DESCENDING).get().await()
+
+                val list = snapshot.documents.mapNotNull { doc ->
+                    val profileMap = doc.get("profile") as? Map<String, Long> ?: emptyMap()
+                    val profile = EmotionProfile(
+                        happiness = profileMap["happiness"]?.toInt() ?: 0,
+                        sadness = profileMap["sadness"]?.toInt() ?: 0,
+                        anger = profileMap["anger"]?.toInt() ?: 0,
+                        fear = profileMap["fear"]?.toInt() ?: 0,
+                        surprise = profileMap["surprise"]?.toInt() ?: 0,
+                        disgust = profileMap["disgust"]?.toInt() ?: 0
+                    )
+                    SentimentDataPoint(
+                        id = doc.getString("id") ?: "",
+                        text = doc.getString("text") ?: "",
+                        sentiment = doc.getString("sentiment") ?: "",
+                        profile = profile,
+                        date = doc.getString("date") ?: "",
+                        timestamp = doc.getString("timestamp") ?: ""
+                    )
+                }
+                _sentimentHistory.value = list
+            } catch (e: Exception) {
+                Log.e("Firebase", "Error fetching", e)
+            }
+        }
+    }
+
+    // --- GROQ API (Fixed Model Name) ---
+    private fun callGroqApi(inputText: String): String {
+        val apiKey = Secrets.GROQ_API_KEY
+        if (apiKey.isBlank()) throw Exception("Missing API Key")
+
+        val url = "https://api.groq.com/openai/v1/chat/completions"
+        val prompt = """
+            Analyze sentiment: "$inputText".
+            Return ONLY a string in this exact format:
+            SENTIMENT: [One word: Positive, Negative, or Neutral]
+            SCORES: Happiness=[0-100], Sadness=[0-100], Anger=[0-100], Fear=[0-100], Surprise=[0-100], Disgust=[0-100]
+        """.trimIndent()
+
+        val jsonBody = JSONObject().apply {
+            // *** THIS IS THE CRITICAL FIX: ***
+            put("model", "llama-3.3-70b-versatile")
+            put("messages", JSONArray().apply {
+                put(JSONObject().apply {
+                    put("role", "user")
+                    put("content", prompt)
+                })
+            })
+        }
+
+        val request = Request.Builder()
+            .url(url)
+            .header("Authorization", "Bearer $apiKey")
+            .header("Content-Type", "application/json")
+            .post(jsonBody.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                val errorBody = response.body?.string()
+                throw Exception("Groq Error ${response.code}: $errorBody")
+            }
+            val json = JSONObject(response.body?.string() ?: "")
+            return json.getJSONArray("choices").getJSONObject(0)
+                .getJSONObject("message").getString("content")
+        }
+    }
+
+    // --- PARSING & HELPERS ---
+    private fun extractValue(text: String, prefix: String): String? {
+        val startIndex = text.indexOf(prefix)
+        if (startIndex == -1) return null
+        val endLine = text.indexOf("\n", startIndex)
+        val endIndex = if (endLine == -1) text.length else endLine
+        return text.substring(startIndex + prefix.length, endIndex).trim()
+    }
+
+    private fun extractScore(text: String, label: String): Int {
+        val start = text.indexOf(label)
+        if (start == -1) return 0
+        val endComma = text.indexOf(",", start)
+        val endLine = text.indexOf("\n", start)
+        var end = if (endComma != -1 && (endLine == -1 || endComma < endLine)) endComma else endLine
+        if (end == -1) end = text.length
+        return try {
+            text.substring(start + label.length, end).replace("]", "").trim().toInt()
+        } catch (e: Exception) { 0 }
+    }
+
+    // Profile Updates
+    fun updateProfile(name: String, email: String) {
+        val user = auth.currentUser ?: return
+        _userProfile.value = _userProfile.value.copy(name = name)
+        user.updateProfile(UserProfileChangeRequest.Builder().setDisplayName(name).build())
+    }
+    fun setProfileImage(uri: Uri) {
+        val user = auth.currentUser ?: return
+        _userProfile.value = _userProfile.value.copy(imageUriString = uri.toString())
+        user.updateProfile(UserProfileChangeRequest.Builder().setPhotoUri(uri).build())
+    }
+    fun setProfileEmoji(emoji: String) { _userProfile.value = _userProfile.value.copy(avatarEmoji = emoji) }
+    fun generateAiAvatar() { _userProfile.value = _userProfile.value.copy(isGeneratedAvatar = true) }
 }

@@ -1,4 +1,5 @@
-// File: app/build.gradle.kts (Module :app)
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -10,9 +11,16 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// --- NEW: Load Secrets from local.properties ---
+val localProperties = Properties()
+val localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localProperties.load(localPropertiesFile.inputStream())
+}
+
 android {
     namespace = "com.example.sentimentanalysis"
-    compileSdk = 36 // Recommended: Ensure this matches your targetSdk
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.example.sentimentanalysis"
@@ -21,6 +29,11 @@ android {
         versionCode = 1
         versionName = "1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // --- NEW: Inject API Key into BuildConfig ---
+        // This takes the key from local.properties and makes it usable in Kotlin
+        val apiKey = localProperties.getProperty("GEMINI_API_KEY") ?: ""
+        buildConfigField("String", "GEMINI_API_KEY", "\"$apiKey\"")
     }
 
     buildTypes {
@@ -33,7 +46,6 @@ android {
         }
     }
 
-    // Using Java 17 is recommended for modern Android projects
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -44,11 +56,10 @@ android {
 
     buildFeatures {
         compose = true
+        // --- NEW: Enable BuildConfig ---
+        buildConfig = true
     }
-    // Note: No composeOptions block is needed for Kotlin 2.0+
 }
-
-// Keep your dependencies block as it was (ensure it includes Firebase and Navigation)
 
 dependencies {
     // 1. Core Android
@@ -61,15 +72,16 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
 
-    // 2. Navigation (Fixes the red 'androidx.navigation' error)
+    // 2. Navigation
     implementation("androidx.navigation:navigation-compose:2.8.5")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
 
-    // 3. Firebase (Fixes the red 'FirebaseAuth' errors)
+    // 3. Firebase
     implementation(platform("com.google.firebase:firebase-bom:33.8.0"))
     implementation("com.google.firebase:firebase-auth-ktx")
+    implementation("com.google.firebase:firebase-firestore")
 
-    // 4. Icons (Fixes the red 'Icons.Filled.Logout' error)
+    // 4. Icons
     implementation("androidx.compose.material:material-icons-extended:1.7.6")
 
     // 5. Google Sign In Credentials
@@ -77,7 +89,10 @@ dependencies {
     implementation("androidx.credentials:credentials-play-services-auth:1.5.0-alpha06")
     implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
     implementation(libs.firebase.crashlytics.buildtools)
+
+    // 6. AI & Images
     implementation("com.google.ai.client.generativeai:generativeai:0.9.0")
     implementation("io.coil-kt:coil-compose:2.4.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.firebase:firebase-firestore")
 }

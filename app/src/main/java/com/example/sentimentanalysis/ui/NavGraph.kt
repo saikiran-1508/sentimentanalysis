@@ -2,7 +2,6 @@ package com.example.sentimentanalysis.ui
 
 import android.widget.Toast
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -10,11 +9,9 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.sentimentanalysis.data.AuthViewModel
-import com.example.sentimentanalysis.data.GoogleAuthUiClient
 import com.example.sentimentanalysis.data.SentimentViewModel
-import com.example.sentimentanalysis.screens.DashboardScreen
-import com.example.sentimentanalysis.screens.ProfileScreen
-import com.example.sentimentanalysis.screens.SignInScreen
+import com.example.sentimentanalysis.screens.*
+import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.launch
 
 @Composable
@@ -25,57 +22,71 @@ fun NavGraph(
     val navController = rememberNavController()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val auth = FirebaseAuth.getInstance()
 
-    // Initialize Google Auth Client to check for logged-in user
-    val googleAuthUiClient = remember { GoogleAuthUiClient(context) }
+    // IF logged in -> Dashboard. IF NOT -> Landing
+    val startDestination = if (auth.currentUser != null) "dashboard" else "landing"
 
-    // Determine where to start (Dashboard if logged in, Sign In if not)
-    val startDestination = if (googleAuthUiClient.getSignedInUser() != null) "dashboard" else "signin"
+    NavHost(navController = navController, startDestination = startDestination) {
 
-    NavHost(
-        navController = navController,
-        startDestination = startDestination
-    ) {
-        // 1. SIGN IN SCREEN
+        // 1. LANDING SCREEN
+        composable("landing") {
+            LandingScreen(
+                onGetStarted = {
+                    navController.navigate("signin")
+                }
+            )
+        }
+
+        // 2. SIGN IN SCREEN
         composable("signin") {
             SignInScreen(
                 viewModel = authViewModel,
                 onAuthSuccess = {
                     navController.navigate("dashboard") {
-                        popUpTo("signin") { inclusive = true } // Clear back stack
+                        popUpTo("landing") { inclusive = true } // Clear backstack so user can't go back to login
                     }
                 },
+                // This was missing in your code, causing the error:
                 onNavigateToSignUp = {
-                    Toast.makeText(context, "Sign Up coming soon", Toast.LENGTH_SHORT).show()
+                    navController.navigate("signup")
                 }
             )
         }
 
-        // 2. DASHBOARD SCREEN
+        // 3. SIGN UP SCREEN (Restored)
+        composable("signup") {
+            SignUpScreen(
+                viewModel = authViewModel,
+                onAuthSuccess = {
+                    navController.navigate("dashboard") {
+                        popUpTo("landing") { inclusive = true }
+                    }
+                },
+                onNavigateToSignIn = {
+                    navController.popBackStack() // Go back to Sign In
+                }
+            )
+        }
+
+        // 4. DASHBOARD
         composable("dashboard") {
             DashboardScreen(
-                sentimentViewModel = sentimentViewModel,
-                onNavigateToProfile = {
-                    navController.navigate("profile")
-                }
+                onNavigateToProfile = { navController.navigate("profile") }
             )
         }
 
-        // 3. PROFILE SCREEN
+        // 5. PROFILE
         composable("profile") {
             ProfileScreen(
                 viewModel = sentimentViewModel,
-                onBack = {
-                    navController.popBackStack()
-                },
+                onBack = { navController.popBackStack() },
                 onLogout = {
                     scope.launch {
-                        googleAuthUiClient.signOut()
+                        auth.signOut()
                         Toast.makeText(context, "Logged Out", Toast.LENGTH_SHORT).show()
-
-                        // Go back to Sign In and clear history
-                        navController.navigate("signin") {
-                            popUpTo(0) { inclusive = true }
+                        navController.navigate("landing") {
+                            popUpTo(0) { inclusive = true } // Clear everything
                         }
                     }
                 }

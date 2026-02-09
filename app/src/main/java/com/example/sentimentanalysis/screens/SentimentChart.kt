@@ -19,7 +19,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.sentimentanalysis.data.SentimentDataPoint
-// Import colors
+// IMPORT YOUR COLORS
 import com.example.sentimentanalysis.ui.theme.*
 
 @Composable
@@ -30,7 +30,7 @@ fun SentimentChart(history: List<SentimentDataPoint>) {
             .height(220.dp),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = CardBg
+            containerColor = CardBg // Uses CardBg from Color.kt
         ),
         elevation = CardDefaults.cardElevation(4.dp)
     ) {
@@ -45,11 +45,7 @@ fun SentimentChart(history: List<SentimentDataPoint>) {
 
             if (history.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        text = "Speak to track emotions...",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color.Gray
-                    )
+                    Text(text = "Speak to track emotions...", color = Color.Gray)
                 }
             } else {
                 Canvas(modifier = Modifier.fillMaxSize()) {
@@ -65,29 +61,20 @@ fun SentimentChart(history: List<SentimentDataPoint>) {
                     points.forEachIndexed { index, point ->
                         val x = index * spacePerPoint
 
-                        // FIX: Calculate 'score' using happiness + surprise
+                        // FIX: Calculate score manually (Happiness + Surprise)
                         val positiveSum = point.profile.happiness + point.profile.surprise
                         val score = (positiveSum / 10f).coerceIn(0f, 10f)
 
-                        // Invert Y because 0 is at the top
                         val y = height - ((score / 10f) * height)
 
                         if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
 
                         val dotColor = if (score >= 5) NeonGreen else NeonRed
 
-                        drawCircle(
-                            color = dotColor,
-                            radius = 12f,
-                            center = Offset(x, y)
-                        )
+                        drawCircle(color = dotColor, radius = 12f, center = Offset(x, y))
                     }
 
-                    drawPath(
-                        path = path,
-                        color = NeonBlue,
-                        style = Stroke(width = 8f, cap = StrokeCap.Round)
-                    )
+                    drawPath(path = path, color = NeonBlue, style = Stroke(width = 8f, cap = StrokeCap.Round))
 
                     val fillPath = Path().apply {
                         addPath(path)
@@ -95,16 +82,7 @@ fun SentimentChart(history: List<SentimentDataPoint>) {
                         lineTo(0f, height)
                         close()
                     }
-
-                    drawPath(
-                        path = fillPath,
-                        brush = Brush.verticalGradient(
-                            colors = listOf(
-                                NeonBlue.copy(alpha = 0.3f),
-                                Color.Transparent
-                            )
-                        )
-                    )
+                    drawPath(path = fillPath, brush = Brush.verticalGradient(listOf(NeonBlue.copy(alpha = 0.3f), Color.Transparent)))
                 }
             }
         }
