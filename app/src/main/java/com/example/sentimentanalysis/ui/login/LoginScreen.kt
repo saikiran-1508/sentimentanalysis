@@ -1,5 +1,5 @@
 // File: ui/login/LoginScreen.kt
-package com.yourname.sentimentanalysis.ui.login
+package com.example.sentimentanalysis.ui.login
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
