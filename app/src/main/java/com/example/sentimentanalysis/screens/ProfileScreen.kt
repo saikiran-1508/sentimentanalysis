@@ -36,7 +36,6 @@ import coil.compose.rememberAsyncImagePainter
 import com.example.sentimentanalysis.data.EmotionProfile
 import com.example.sentimentanalysis.data.SentimentDataPoint
 import com.example.sentimentanalysis.data.SentimentViewModel
-// Removed Theme imports to ensure strict Black & White
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -51,26 +50,34 @@ fun ProfileScreen(
     var editName by remember { mutableStateOf(userProfile.name) }
 
     var showAvatarSheet by remember { mutableStateOf(false) }
+
+    // State for the AI Prompt text bar
+    var aiPrompt by remember { mutableStateOf("") }
+
     val context = LocalContext.current
 
     val imagePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         uri?.let {
-            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION
-            context.contentResolver.takePersistableUriPermission(it, flags)
-            viewModel.setProfileImage(it)
-            showAvatarSheet = false
+            try {
+                val takeFlags: Int = Intent.FLAG_GRANT_READ_URI_PERMISSION
+                context.contentResolver.takePersistableUriPermission(it, takeFlags)
+                viewModel.setProfileImage(it)
+                showAvatarSheet = false
+            } catch (e: Exception) {
+                viewModel.setProfileImage(it)
+                showAvatarSheet = false
+            }
         }
     }
 
     val defaultCharacters = listOf("🤖", "👽", "🦊", "🦁", "🐵", "🦄", "💀", "🎃", "🦸", "🥷", "🧙", "👼")
 
-    // --- STRICT BLACK & WHITE BACKGROUND ---
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black) // Pure Black Background
+            .background(Color.Black)
     ) {
         Scaffold(
             containerColor = Color.Transparent,
@@ -92,7 +99,7 @@ fun ProfileScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
 
-                // 1. PROFILE IMAGE (Monochrome Border)
+                // 1. PROFILE IMAGE
                 Box(
                     modifier = Modifier
                         .size(120.dp)
@@ -104,26 +111,25 @@ fun ProfileScreen(
                             .size(110.dp)
                             .clip(CircleShape)
                             .background(Color.DarkGray)
-                            .border(2.dp, Color.White, CircleShape), // White Border
+                            .border(2.dp, Color.White, CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
                         if (userProfile.imageUriString != null) {
                             Image(
-                                painter = rememberAsyncImagePainter(Uri.parse(userProfile.imageUriString)),
+                                painter = rememberAsyncImagePainter(userProfile.imageUriString),
                                 contentDescription = null,
                                 modifier = Modifier.fillMaxSize(),
                                 contentScale = ContentScale.Crop
                             )
-                        } else if (userProfile.isGeneratedAvatar) {
-                            Icon(Icons.Default.SmartToy, null, tint = Color.White, modifier = Modifier.size(60.dp))
                         } else if (userProfile.avatarEmoji != null) {
                             Text(userProfile.avatarEmoji!!, fontSize = 50.sp)
+                        } else if (userProfile.isGeneratedAvatar) {
+                            Icon(Icons.Default.SmartToy, null, tint = Color.White, modifier = Modifier.size(60.dp))
                         } else {
                             Icon(Icons.Default.Person, null, tint = Color.LightGray, modifier = Modifier.size(60.dp))
                         }
                     }
 
-                    // Edit Icon (White Circle)
                     Box(
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
@@ -140,7 +146,7 @@ fun ProfileScreen(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // 2. NAME EDITING (White Text)
+                // 2. NAME & EMAIL (Email now shows Login Email)
                 if (isEditingName) {
                     OutlinedTextField(
                         value = editName,
@@ -175,12 +181,11 @@ fun ProfileScreen(
                             Icon(Icons.Default.Edit, "Edit", tint = Color.Gray, modifier = Modifier.size(18.dp))
                         }
                     }
-                    Text(userProfile.email, color = Color.Gray)
+                    Text(userProfile.email, color = Color.Gray) // Shows user login email
                 }
 
                 Spacer(modifier = Modifier.height(30.dp))
 
-                // 3. HISTORY LIST
                 Text("Analysis History", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Start))
                 Spacer(modifier = Modifier.height(10.dp))
 
@@ -198,7 +203,6 @@ fun ProfileScreen(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // LOGOUT BUTTON (White Outline)
                 OutlinedButton(
                     onClick = onLogout,
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
@@ -209,7 +213,7 @@ fun ProfileScreen(
                 }
             }
 
-            // AVATAR SHEET (Black Background)
+            // AVATAR SHEET (With AI Generation Prompt)
             if (showAvatarSheet) {
                 ModalBottomSheet(
                     onDismissRequest = { showAvatarSheet = false },
@@ -217,18 +221,49 @@ fun ProfileScreen(
                     contentColor = Color.White
                 ) {
                     Column(modifier = Modifier.padding(20.dp)) {
-                        Text("Choose an Avatar", style = MaterialTheme.typography.titleLarge, color = Color.White, fontWeight = FontWeight.Bold)
-                        Spacer(modifier = Modifier.height(20.dp))
+                        Text("AI Avatar Generator", style = MaterialTheme.typography.titleLarge, color = Color.White, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(16.dp))
 
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                            AvatarOptionButtonBW(Icons.Default.Image, "Upload Photo") { imagePicker.launch(arrayOf("image/*")) }
-                            AvatarOptionButtonBW(Icons.Default.AutoAwesome, "Generate AI") { viewModel.generateAiAvatar(); showAvatarSheet = false }
+                        // AI PROMPT TEXT BAR
+                        OutlinedTextField(
+                            value = aiPrompt,
+                            onValueChange = { aiPrompt = it },
+                            label = { Text("Describe your avatar (e.g. 'Cyberpunk Fox')", color = Color.Gray) },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = Color.White,
+                                unfocusedBorderColor = Color.DarkGray
+                            )
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Button(
+                            onClick = {
+                                if (aiPrompt.isNotBlank()) {
+                                    viewModel.generateAiAvatar(aiPrompt)
+                                    showAvatarSheet = false
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray)
+                        ) {
+                            Icon(Icons.Default.AutoAwesome, null, tint = Color.White)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Generate & Upload", color = Color.White)
                         }
 
                         Spacer(modifier = Modifier.height(24.dp))
                         HorizontalDivider(color = Color.Gray)
                         Spacer(modifier = Modifier.height(16.dp))
 
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                            AvatarOptionButtonBW(Icons.Default.Image, "Upload Photo") { imagePicker.launch(arrayOf("image/*")) }
+                        }
+
+                        Spacer(modifier = Modifier.height(20.dp))
                         Text("Or pick a character:", color = Color.Gray, modifier = Modifier.padding(bottom = 12.dp))
 
                         LazyVerticalGrid(
@@ -241,7 +276,7 @@ fun ProfileScreen(
                                     modifier = Modifier
                                         .size(60.dp)
                                         .clip(CircleShape)
-                                        .background(Color.DarkGray) // Dark Gray circles
+                                        .background(Color.DarkGray)
                                         .clickable {
                                             viewModel.setProfileEmoji(char)
                                             showAvatarSheet = false
@@ -260,7 +295,7 @@ fun ProfileScreen(
     }
 }
 
-// --- BLACK & WHITE HELPER COMPONENTS ---
+// --- HELPER COMPONENTS REMAIN THE SAME ---
 
 @Composable
 fun AvatarOptionButtonBW(icon: ImageVector, text: String, onClick: () -> Unit) {
@@ -289,7 +324,7 @@ fun HistoryExpandableCardBW(item: SentimentDataPoint) {
             .fillMaxWidth()
             .padding(vertical = 4.dp)
             .clickable { expanded = !expanded },
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A)), // Very Dark Gray card
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A)),
         shape = RoundedCornerShape(12.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, Color.DarkGray)
     ) {
@@ -349,7 +384,7 @@ fun MiniBarRowBW(label: String, pct: Int) {
         LinearProgressIndicator(
             progress = { pct / 100f },
             modifier = Modifier.weight(1f).height(4.dp).clip(RoundedCornerShape(2.dp)),
-            color = Color.White, // White Progress Bar
+            color = Color.White,
             trackColor = Color.DarkGray
         )
         Text("$pct%", color = Color.White, fontSize = 10.sp, modifier = Modifier.padding(start=8.dp))
