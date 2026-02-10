@@ -84,6 +84,7 @@ class SentimentViewModel : ViewModel() {
         auth.addAuthStateListener { firebaseAuth ->
             val user = firebaseAuth.currentUser
             if (user != null) {
+                // FIXED: Use the actual login email
                 _userProfile.value = _userProfile.value.copy(
                     name = user.displayName ?: "User",
                     email = user.email ?: ""
@@ -99,7 +100,9 @@ class SentimentViewModel : ViewModel() {
     private suspend fun fetchUserProfile(uid: String) {
         try {
             val doc = firestore.collection("users").document(uid).get().await()
-            doc.toObject(UserProfile::class.java)?.let { _userProfile.value = it }
+            doc.toObject(UserProfile::class.java)?.let { fetched ->
+                _userProfile.value = fetched.copy(email = auth.currentUser?.email ?: fetched.email)
+            }
         } catch (e: Exception) {
             Log.e("SentimentViewModel", "Fetch Error: ${e.message}")
         }
@@ -133,10 +136,11 @@ class SentimentViewModel : ViewModel() {
             try {
                 val response = generativeModel.generateContent(content {
                     blob("audio/mp4", file.readBytes())
-                    text("Analyze audio tone. Return: TRANSCRIPT, SENTIMENT, and SCORES for Happiness, Sadness, Anger, Fear, Surprise, Disgust. Use format Happiness=20.")
+                    text("Analyze audio tone. Return: TRANSCRIPT, SENTIMENT, and SCORES for Happiness, Sadness, Anger, Fear, Surprise, Disgust. Use format Happiness=50.")
                 })
                 val out = response.text ?: ""
 
+                // ROBUST PARSING: Ensures all 6 emotions are captured
                 val profile = EmotionProfile(
                     happiness = extractScore(out, "Happiness"),
                     sadness = extractScore(out, "Sadness"),
@@ -147,13 +151,13 @@ class SentimentViewModel : ViewModel() {
                 )
 
                 _uiState.value = SentimentState.Success(
-                    extractValue(out, "SENTIMENT: ") ?: "Neutral",
-                    extractValue(out, "TRANSCRIPT: ") ?: "Audio Input",
+                    extractValue(out, "SENTIMENT:") ?: "Neutral",
+                    extractValue(out, "TRANSCRIPT:") ?: "Audio Input",
                     profile
                 )
                 saveToFirebase(
-                    extractValue(out, "TRANSCRIPT: ") ?: "Audio",
-                    extractValue(out, "SENTIMENT: ") ?: "Neutral",
+                    extractValue(out, "TRANSCRIPT:") ?: "Audio",
+                    extractValue(out, "SENTIMENT:") ?: "Neutral",
                     profile
                 )
             } catch (e: Exception) {
@@ -185,37 +189,24 @@ class SentimentViewModel : ViewModel() {
 
         viewModelScope.launch {
             try {
-                firestore.collection("users")
-                    .document(user.uid)
-                    .collection("history")
-                    .document(data.id)
-                    .set(data)
-                    .await()
-
+                firestore.collection("users").document(user.uid)
+                    .collection("history").document(data.id).set(data).await()
                 fetchHistory(user.uid)
-            } catch (e: Exception) {
-                Log.e("FirestoreError", "Save failed: ${e.message}")
-            }
+            } catch (e: Exception) { Log.e("FirestoreError", "Save failed") }
         }
     }
 
     private fun fetchHistory(uid: String) {
         viewModelScope.launch {
             try {
-                val snap = firestore.collection("users")
-                    .document(uid)
-                    .collection("history")
-                    .orderBy("id", Query.Direction.DESCENDING)
-                    .limit(10)
-                    .get()
-                    .await()
-
+                val snap = firestore.collection("users").document(uid)
+                    .collection("history").orderBy("id", Query.Direction.DESCENDING).limit(10).get().await()
                 _sentimentHistory.value = snap.documents.mapNotNull { it.toObject(SentimentDataPoint::class.java) }
-            } catch (e: Exception) {
-                Log.e("FirestoreError", "Fetch failed: ${e.message}")
-            }
+            } catch (e: Exception) { Log.e("FirestoreError", "Fetch failed") }
         }
     }
+
+    // --- PROFILE ACTIONS ---
 
     fun updateProfile(name: String, email: String) {
         val user = auth.currentUser ?: return
@@ -225,7 +216,7 @@ class SentimentViewModel : ViewModel() {
                 val updated = _userProfile.value.copy(name = name, email = email)
                 _userProfile.value = updated
                 firestore.collection("users").document(user.uid).set(updated, SetOptions.merge()).await()
-            } catch (e: Exception) { Log.e("VM", "Update Error: ${e.message}") }
+            } catch (e: Exception) { Log.e("VM", "Update Error") }
         }
     }
 
@@ -252,15 +243,13 @@ class SentimentViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 _uiState.value = SentimentState.Loading
-                val response = generativeModel.generateContent("Pick ONE emoji character for: $prompt. Return ONLY emoji.")
+                val response = generativeModel.generateContent("Pick ONE emoji for: $prompt. Return ONLY the emoji.")
                 val emoji = response.text?.trim() ?: "🤖"
                 val updated = _userProfile.value.copy(avatarEmoji = emoji, imageUriString = null, isGeneratedAvatar = true)
                 _userProfile.value = updated
                 firestore.collection("users").document(user.uid).set(updated, SetOptions.merge()).await()
                 _uiState.value = SentimentState.Idle
-            } catch (e: Exception) {
-                _uiState.value = SentimentState.Error("AI Fail")
-            }
+            } catch (e: Exception) { _uiState.value = SentimentState.Error("AI Fail") }
         }
     }
 }

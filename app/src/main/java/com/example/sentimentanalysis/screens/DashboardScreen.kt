@@ -28,6 +28,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalContext
@@ -59,10 +60,10 @@ fun DashboardScreen(
     onNavigateToProfile: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val audioPath by viewModel.lastAudioPath.collectAsState() // Accesses the actual recording path
+    val audioPath by viewModel.lastAudioPath.collectAsState()
     val context = LocalContext.current
 
-    // --- Media Player for Voice Playback ---
+    // --- Media Player for Playing Your Own Voice ---
     val mediaPlayer = remember { MediaPlayer() }
 
     // --- PERMISSION LAUNCHER ---
@@ -76,13 +77,14 @@ fun DashboardScreen(
         }
     }
 
+    // Cleaning up the player when screen closes
     DisposableEffect(Unit) {
         onDispose {
             mediaPlayer.release()
         }
     }
 
-    // Greeting logic
+    // Greeting logic based on time
     val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
     val greetingTitle = when (hour) {
         in 5..11 -> "Good Morning"
@@ -91,7 +93,7 @@ fun DashboardScreen(
         else -> "Good Night"
     }
 
-    // Pulse Animation for Mic
+    // Pulse Animation for the Microphone
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val scale by infiniteTransition.animateFloat(
         initialValue = 1f, targetValue = 1.2f,
@@ -103,7 +105,14 @@ fun DashboardScreen(
             containerColor = Color.Transparent,
             topBar = {
                 TopAppBar(
-                    title = { Text("AI Sentiment Analyzer", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp) },
+                    title = {
+                        Text(
+                            text = "AI Sentiment Analyzer",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 20.sp
+                        )
+                    },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                     actions = {
                         IconButton(onClick = onNavigateToProfile) {
@@ -121,9 +130,11 @@ fun DashboardScreen(
                     .verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // --- RECORDING UI ---
+                // --- RECORDING INTERFACE ---
                 if (uiState !is SentimentState.Success) {
+
                     Spacer(modifier = Modifier.height(20.dp))
+
                     Text(text = greetingTitle, color = Color.Gray, fontSize = 32.sp, fontWeight = FontWeight.SemiBold)
 
                     val statusText = if (uiState is SentimentState.Recording) "Listening... Tap to Stop" else "Tap mic to Record"
@@ -133,8 +144,9 @@ fun DashboardScreen(
 
                     Spacer(modifier = Modifier.height(40.dp))
 
-                    // MIC BUTTON WITH ANIMATION
+                    // MIC BUTTON WITH PULSE
                     Box(modifier = Modifier.size(200.dp), contentAlignment = Alignment.Center) {
+
                         if (uiState is SentimentState.Recording) {
                             Box(modifier = Modifier.size(160.dp).scale(scale).border(1.dp, Color.Red.copy(alpha = 0.5f), CircleShape))
                         } else {
@@ -158,7 +170,13 @@ fun DashboardScreen(
                                     }
                                 }
                             },
-                            modifier = Modifier.size(100.dp).border(2.dp, if(uiState is SentimentState.Recording) Color.Red else Color.White, CircleShape),
+                            modifier = Modifier
+                                .size(100.dp)
+                                .border(
+                                    width = 2.dp,
+                                    color = if(uiState is SentimentState.Recording) Color.Red else Color.White,
+                                    shape = CircleShape
+                                ),
                             containerColor = Color.Black,
                             shape = CircleShape,
                             elevation = FloatingActionButtonDefaults.elevation(0.dp)
@@ -176,6 +194,7 @@ fun DashboardScreen(
                     if (uiState is SentimentState.Error) {
                         Text((uiState as SentimentState.Error).message, color = Color.Red, fontSize = 12.sp)
                     }
+
                     if (uiState is SentimentState.Loading) {
                         CircularProgressIndicator(color = Color.White)
                         Spacer(modifier = Modifier.height(8.dp))
@@ -183,7 +202,7 @@ fun DashboardScreen(
                     }
                 }
 
-                // --- RESULTS UI ---
+                // --- RESULTS INTERFACE ---
                 if (uiState is SentimentState.Success) {
                     val state = uiState as SentimentState.Success
 
@@ -197,7 +216,7 @@ fun DashboardScreen(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // Transcript Card with VOICE PLAYBACK
+                    // Transcript Card with Playback Icon
                     Card(
                         colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A1A)),
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
@@ -215,6 +234,8 @@ fun DashboardScreen(
                                     fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
                                 )
                             }
+
+                            // PLAYBACK BUTTON (User hears their voice)
                             IconButton(onClick = {
                                 audioPath?.let { path ->
                                     try {
@@ -223,31 +244,37 @@ fun DashboardScreen(
                                         mediaPlayer.prepare()
                                         mediaPlayer.start()
                                     } catch (e: Exception) {
-                                        Toast.makeText(context, "Playback error", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "Error playing audio", Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             }) {
-                                Icon(Icons.Default.VolumeUp, "Listen to yourself", tint = ColorHappiness)
+                                Icon(Icons.Default.VolumeUp, "Listen", tint = ColorHappiness)
                             }
                         }
                     }
 
                     Spacer(modifier = Modifier.height(24.dp))
 
-                    // PIE CHART (Restored and math-fixed)
+                    // PIE CHART BOX
                     Box(modifier = Modifier.size(300.dp)) {
                         EmotionPieChartWithLabels(state.profile)
                     }
 
                     Spacer(modifier = Modifier.height(24.dp))
 
-                    // EMOTION ROWS
+                    // EMOTION BREAKDOWN LIST (Side Bars)
                     Column(modifier = Modifier.fillMaxWidth()) {
+
                         DashboardEmotionRow("Happiness", state.profile.happiness, ColorHappiness)
+
                         DashboardEmotionRow("Sadness", state.profile.sadness, ColorSadness)
+
                         DashboardEmotionRow("Anger", state.profile.anger, ColorAnger)
+
                         DashboardEmotionRow("Fear", state.profile.fear, ColorFear)
+
                         DashboardEmotionRow("Surprise", state.profile.surprise, ColorSurprise)
+
                         DashboardEmotionRow("Disgust", state.profile.disgust, ColorDisgust)
                     }
 
@@ -259,6 +286,7 @@ fun DashboardScreen(
                     ) {
                         Text("Analyze New Audio", color = Color.White)
                     }
+
                     Spacer(modifier = Modifier.height(40.dp))
                 }
             }
@@ -266,7 +294,7 @@ fun DashboardScreen(
     }
 }
 
-// --- PIE CHART COMPONENT ---
+// --- PIE CHART DRAWING ---
 
 @Composable
 fun EmotionPieChartWithLabels(profile: EmotionProfile) {
@@ -290,7 +318,14 @@ fun EmotionPieChartWithLabels(profile: EmotionProfile) {
 
         slices.forEach { (value, color, label) ->
             val sweepAngle = (value / safeTotal) * 360f
-            drawArc(color = color, startAngle = startAngle, sweepAngle = sweepAngle, useCenter = true, size = Size(size.width, size.height))
+
+            drawArc(
+                color = color,
+                startAngle = startAngle,
+                sweepAngle = sweepAngle,
+                useCenter = true,
+                size = Size(size.width, size.height)
+            )
 
             if (sweepAngle > 15f) {
                 val midAngle = Math.toRadians((startAngle + sweepAngle / 2).toDouble())
@@ -314,20 +349,26 @@ fun EmotionPieChartWithLabels(profile: EmotionProfile) {
     }
 }
 
-// --- EMOTION PROGRESS BAR COMPONENT ---
+// --- SIDE BAR ROW ---
 
 @Composable
 fun DashboardEmotionRow(label: String, value: Int, color: Color) {
     if (value > 0) {
         Column(modifier = Modifier.padding(vertical = 4.dp)) {
+
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(modifier = Modifier.size(10.dp).background(color, CircleShape))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(text = "$label: $value%", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
             }
+
             LinearProgressIndicator(
                 progress = { value / 100f },
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp).height(6.dp).clip(RoundedCornerShape(3.dp)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp)
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp)),
                 color = color,
                 trackColor = Color.DarkGray
             )
